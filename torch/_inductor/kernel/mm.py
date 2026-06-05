@@ -25,7 +25,7 @@ from ..codegen.cutlass.gemm_template import CUTLASS2xGemmTemplate, CUTLASS3xGemm
 from ..codegen.rocm.ck_tile_universal_gemm_template import CKTileGemmTemplate
 from ..codegen.rocm.ck_universal_gemm_template import CKGemmTemplate
 from ..codegen.subgraph import SubgraphChoiceCaller, SubgraphTemplate
-from ..ir import Buffer, ChoiceCaller, is_triton, Layout
+from ..ir import Buffer, ChoiceCaller, is_triton, Layout, PermuteView, TensorBox
 from ..kernel_inputs import MMKernelInputs
 from ..lowering import (
     fallback_handler,
@@ -982,6 +982,14 @@ def tuned_scaled_mm_v2(
 
     # Only handle single-level scales (no MX/NV)
     scale_a_real, scale_b_real = realize_inputs(scale_a[0], scale_b[0])
+
+    # When falling back to aten._scaled_mm (v1) for MX types (BlockWise1x32,
+    # BlockWise1x16), transpose scale_b from v2 convention [N, K//32] to v1
+    # convention [K//32, N]. The v1 kernel checks scale_b shape against
+    # b.t()/scale_b.t(), so the shape must match.
+    if not supported_recipe and len(scale_b_real.get_size()) == 2:
+        scale_b_real = TensorBox(PermuteView.create(scale_b_real.data, (1, 0)))
+        scale_b_real = realize_inputs(scale_b_real)
 
     input_nodes: list[Any]
 
