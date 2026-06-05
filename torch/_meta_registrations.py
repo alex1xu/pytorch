@@ -7479,6 +7479,10 @@ def _check_scaled_mm_sizes_v2(
                 expected_scale_a_elems = ceil_div(self.shape[0], 32) * self.shape[1]
                 expected_scale_b_elems = ceil_div(self.shape[1], 32) * self.shape[0]
                 expected_swizzle = SwizzleType.NO_SWIZZLE
+            elif device_hint(self) == "xpu":
+                expected_scale_a_elems = M * ceil_div(K, 32)
+                expected_scale_b_elems = N * ceil_div(K, 32)
+                expected_swizzle = SwizzleType.NO_SWIZZLE
             else:
                 expected_scale_a_elems = round_up(self.shape[0], 128) * round_up(
                     ceil_div(self.shape[1], 32), 4
