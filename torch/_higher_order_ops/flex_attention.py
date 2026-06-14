@@ -448,6 +448,8 @@ def trace_flex_attention(
         mask_graph = reenter_make_fx(mask_mod)(
             *mask_example_vals, *mask_mod_other_buffers
         )
+    _sync_other_buffer_placeholder_meta(score_graph, 5, score_mod_other_buffers)
+    _sync_other_buffer_placeholder_meta(mask_graph, 4, mask_mod_other_buffers)
     if not isinstance(proxy_mode.tracer, torch.fx.Tracer):
         raise AssertionError(
             f"expected proxy_mode.tracer to be torch.fx.Tracer, got {type(proxy_mode.tracer)}"
@@ -480,6 +482,19 @@ def trace_flex_attention(
         constant=None,
         tracer=proxy_mode.tracer,
     )
+
+
+def _sync_other_buffer_placeholder_meta(
+    graph: GraphModule,
+    fixed_arg_count: int,
+    other_buffers: tuple[Any, ...],
+) -> None:
+    placeholders = graph.graph.find_nodes(op="placeholder")
+    for placeholder, buffer in zip(placeholders[fixed_arg_count:], other_buffers):
+        if isinstance(buffer, torch.Tensor):
+            continue
+        if type(buffer) is int or isinstance(buffer, torch.SymInt):
+            placeholder.meta["val"] = buffer
 
 
 @flex_attention.py_impl(ProxyTorchDispatchMode)
@@ -1210,6 +1225,9 @@ def trace_flex_attention_backward(
         mask_graph = _maybe_reenter_make_fx(mask_graph)(
             *mask_example_vals, *mask_mod_other_buffers
         )
+    _sync_other_buffer_placeholder_meta(fw_graph, 5, score_mod_other_buffers)
+    _sync_other_buffer_placeholder_meta(joint_graph, 6, score_mod_other_buffers)
+    _sync_other_buffer_placeholder_meta(mask_graph, 4, mask_mod_other_buffers)
     if not isinstance(proxy_mode.tracer, torch.fx.Tracer):
         raise AssertionError(
             f"expected proxy_mode.tracer to be torch.fx.Tracer, got {type(proxy_mode.tracer)}"
@@ -1467,10 +1485,19 @@ def flex_attention_backward_fake_tensor_mode(
     broadcasted_grad_value = value.new_empty((Bq, Hkv, seq_len_kv, v_head_dim))
     broadcasted_grad_value = _permute_strides(broadcasted_grad_value, value.stride())
 
-    if Bq > 1 and Bkv == 1:
+    from torch.fx.experimental.symbolic_shapes import guard_or_false, guard_or_true
+
+    # The fake kernel must choose one metadata shape during tracing. Reduce to
+    # key/value batch only when key/value is provably batch-broadcast; otherwise
+    # keep the non-broadcast metadata and record its equality precondition.
+    if guard_or_false(Bkv == 1) and guard_or_true(Bq != 1):
         grad_key = torch.sum(broadcasted_grad_key, dim=0, keepdim=True)
         grad_value = torch.sum(broadcasted_grad_value, dim=0, keepdim=True)
     else:
+        torch._check(
+            Bq == Bkv,
+            lambda: "grad_key/grad_value batch must match key/value batch.",
+        )
         grad_key = broadcasted_grad_key
         grad_value = broadcasted_grad_value
 

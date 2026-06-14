@@ -205,12 +205,22 @@ def build_subgraph_buffer(args: list[TensorBox], subgraph: Subgraph) -> Subgraph
     return build_subgraph_module_buffer(args, subgraph.graph_module)
 
 
-def maybe_realize(args: list[IRNode | None]):
+def canonicalize_scalar_captures(args):
+    return tree_map(lambda x: sympy.Integer(x) if type(x) is int else x, args)
+
+
+def maybe_realize(args: list[IRNode | sympy.Expr | int | None]):
     """Accepts a list of optional IRNodes and returns a list of realized IRNodes"""
+
+    def realize_or_keep_scalar(x: IRNode | sympy.Expr | int | None):
+        if type(x) is int:
+            return sympy.Integer(x)
+        if x is None or isinstance(x, sympy.Expr):
+            return x
+        return realize_inputs(x)
+
     return tree_map(
-        lambda x: (
-            realize_inputs(x) if x is not None and not isinstance(x, sympy.Expr) else x
-        ),
+        realize_or_keep_scalar,
         args,
     )
 

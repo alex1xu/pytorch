@@ -28,6 +28,7 @@ from .common import (
     _flex_kernel_options_example,
     _flex_kernel_tuning_options,
     build_subgraph_buffer,
+    canonicalize_scalar_captures,
     create_indices_fake,
     create_num_blocks_fake_generator,
     create_placeholder,
@@ -185,6 +186,8 @@ def flex_attention(
             f"NYI: embedding dimension of the query, key, and value must be "
             f"at least 16 but got E={query.get_size()[-1]} and Ev={value.get_size()[-1]}"
         )
+    score_mod_other_buffers = canonicalize_scalar_captures(score_mod_other_buffers)
+    mask_mod_other_buffers = canonicalize_scalar_captures(mask_mod_other_buffers)
 
     (
         _,  # q_length
@@ -768,6 +771,8 @@ def flex_attention_backward(*args, **kwargs):
     dtype = query.get_dtype()
     Bq, Hq, seq_len_q, qk_head_dim = query.get_size()
     Bkv, Hkv, seq_len_kv, v_head_dim = value.get_size()
+    score_mod_other_buffers = canonicalize_scalar_captures(score_mod_other_buffers)
+    mask_mod_other_buffers = canonicalize_scalar_captures(mask_mod_other_buffers)
 
     if not V.graph.sizevars.evaluate_expr(sympy.Eq(Bq, Bkv) | sympy.Eq(Bkv, 1)):
         raise AssertionError(
