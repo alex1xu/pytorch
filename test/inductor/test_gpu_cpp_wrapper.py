@@ -176,6 +176,25 @@ class TestGpuWrapper(InductorTestCase):
             _, code = test_torchinductor.run_and_get_cpp_code(compiled, x, 3)
         self.assertIn("torch.tensor(arg, device='cpu')", code)
 
+    @config.patch("triton.divisible_by_16", True)
+    def test_misaligned_input_view_with_cpp_wrapper(self):
+        if not RUN_GPU:
+            self.skipTest("GPU not available")
+
+        def test_fn(x):
+            return x.sin() + x.cos()
+
+        # This is contiguous but its data pointer is offset by one float, so it is
+        # not 16-byte aligned even though its symbolic TensorArg offset is zero.
+        base = torch.randn(1025, device=self.device)
+        x = base[1:]
+        self.assertTrue(x.is_contiguous())
+        self.assertNotEqual(x.data_ptr() % 16, 0)
+
+        compiled = torch.compile(options={"cpp_wrapper": True})(test_fn)
+        actual, _ = test_torchinductor.run_and_get_cpp_code(compiled, x)
+        self.assertEqual(actual, test_fn(x))
+
     @config.patch(implicit_fallbacks=True)
     def test_fbcode_custom_op_fallback_python_arg_helpers(self):
         if not RUN_GPU:

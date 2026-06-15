@@ -315,7 +315,11 @@ def config_of(
         divisible_by_16 = tuple(
             i
             for i, arg in zip(indices, args)
-            if is_aligned(arg, alignment=16, include_tensor=True)
+            if is_aligned(
+                arg,
+                alignment=16,
+                include_tensor=not V.graph.cpp_wrapper,
+            )
         )
     else:
         divisible_by_16 = ()

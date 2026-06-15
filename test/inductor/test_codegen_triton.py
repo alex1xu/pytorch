@@ -1,14 +1,17 @@
 # Owner(s): ["module: inductor"]
 import contextlib
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import sympy
 
 import torch
+from torch._inductor import ir
 import torch._inductor.config as inductor_config
 from torch._inductor.codegen import triton_utils
 from torch._inductor.codegen.common import CSEVariable, SizeArg, TensorArg
+from torch._inductor.codegen.cpp_wrapper_cpu import CppWrapperCpu
 from torch._inductor.codegen.simd import IterationRangesRoot
 from torch._inductor.codegen.simd_kernel_features import SIMDKernelFeatures
 from torch._inductor.codegen.triton import (
@@ -181,6 +184,83 @@ class TestCodegenTriton(InductorTestCase):
         self.assertTrue(
             V.graph.sizevars.statically_known_multiple_of(s2, 16),
         )
+
+    @inductor_config.patch("triton.divisible_by_16", True)
+    def test_config_of_skips_tensor_divisibility_for_cpp_wrapper(self):
+        from torch._inductor.utils import (
+            get_triton_attrs_descriptor_version,
+            TritonAttrsDescriptorVersion,
+        )
+
+        def _has_divisibility_16(config, idx):
+            if get_triton_attrs_descriptor_version() in {
+                TritonAttrsDescriptorVersion.V1_COMPILER,
+                TritonAttrsDescriptorVersion.V0_NO_TRITON,
+            }:
+                return idx in config.divisible_by_16
+            if get_triton_attrs_descriptor_version() in {
+                TritonAttrsDescriptorVersion.V2_BACKENDS,
+                TritonAttrsDescriptorVersion.V3_BACKENDS_TUPLE,
+            }:
+                return idx in config.divisibility_16
+            self.assertIsInstance(config, dict)
+            return (idx,) in config and ["tt.divisibility", 16] in config[(idx,)]
+
+        arg = TensorArg(name="in_ptr0", buffer="buf0", dtype=torch.float32)
+        V.graph.graph_inputs[arg.buffer] = object()
+
+        original_cpp_wrapper = V.graph.cpp_wrapper
+        try:
+            V.graph.cpp_wrapper = False
+            self.assertTrue(_has_divisibility_16(triton_utils.config_of([arg]), 0))
+
+            V.graph.cpp_wrapper = True
+            self.assertFalse(_has_divisibility_16(triton_utils.config_of([arg]), 0))
+        finally:
+            V.graph.cpp_wrapper = original_cpp_wrapper
+            V.graph.graph_inputs.pop(arg.buffer, None)
+
+    def test_cpp_wrapper_python_fallback_return_slots_skip_mutation_outputs(self):
+        original_cpp_wrapper = V.graph.cpp_wrapper
+        try:
+            V.graph.cpp_wrapper = True
+            with torch.library._scoped_library(
+                "cpp_wrapper_fallback_test", "FRAGMENT"
+            ) as m:
+                m.define(
+                    "mutate_and_return_(Tensor(a!) out, Tensor x, str tag) -> Tensor"
+                )
+
+                op_overload = (
+                    torch.ops.cpp_wrapper_fallback_test.mutate_and_return_.default
+                )
+                wrapper = CppWrapperCpu()
+                mutation_output = object.__new__(ir.MutationOutput)
+                raw_args = [
+                    SimpleNamespace(codegen_reference=lambda: "out_handle"),
+                    SimpleNamespace(codegen_reference=lambda: "x_handle"),
+                    "tag",
+                ]
+
+                wrapper.generate_fallback_kernel_with_runtime_lookup_python(
+                    "buf",
+                    "test_kernel",
+                    op_overload,
+                    raw_args=raw_args,
+                    output_args=["mutated", "actual"],
+                    raw_outputs=[mutation_output, object()],
+                )
+
+                code = "\n".join(str(line) for line in wrapper.lines)
+                self.assertIn(
+                    "actual = reinterpret_cast<AtenTensorHandle>("
+                    "PyCapsule_GetPointer(py_buf.get(), NULL));",
+                    code,
+                )
+                self.assertNotIn("PyList_GET_ITEM(py_buf.get(), 1)", code)
+                self.assertNotIn("RAIIAtenTensorHandle mutated;", code)
+        finally:
+            V.graph.cpp_wrapper = original_cpp_wrapper
 
     def test_pow_uses_active_override_constant_lowering(self):
         exponent = CSEVariable("ks0", ValueRanges.unknown(), torch.int64)
