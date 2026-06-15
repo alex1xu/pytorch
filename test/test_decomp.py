@@ -1148,6 +1148,24 @@ class DecompOneOffTests(TestCase):
         self.assertEqual(exp, exp_ref)
         self.assertFalse(exp.isinf().any())
 
+    @onlyNativeDeviceTypes
+    def test_linspace_integer_endpoints_match_eager(self, device):
+        # https://github.com/pytorch/pytorch/issues/137546
+        # Integer linspace truncates the endpoints toward zero before
+        # interpolating, so the ref must do the same to agree with eager.
+        # Both cases have exactly-representable steps after truncation, so the
+        # match is exact on the cpu (double) and cuda (float) eager paths alike.
+        for start, end, steps in ((4.9, 3, 5), (-2.5, 2, 5)):
+            for dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+                if dtype == torch.uint8 and (start < 0 or end < 0):
+                    continue
+                eager = torch.linspace(start, end, steps, dtype=dtype, device=device)
+                ref = torch._refs.linspace(start, end, steps, dtype=dtype, device=device)
+                self.assertEqual(
+                    ref, eager, exact_dtype=True,
+                    msg=f"linspace({start}, {end}, {steps}, dtype={dtype})",
+                )
+
     @unittest.skipIf(TEST_WITH_ASAN, "Skipped under ASAN")
     @skipIfCrossRef
     @onlyCUDA

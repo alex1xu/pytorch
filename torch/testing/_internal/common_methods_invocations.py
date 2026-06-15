@@ -23546,8 +23546,9 @@ python_ref_db = [
 
             # cpu implementation is wrong on some integral types
             # https://github.com/pytorch/pytorch/issues/81996
-            DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_python_ref_torch_fallback',
-                         dtypes=(torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64), device_type="cpu"),
+            # With tensor endpoints the ref interpolates in float64 and matches the
+            # eager cpu double path exactly, so only test_python_ref (which lowers
+            # through float32 prims) still diverges on cpu.
             DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_python_ref',
                          dtypes=(torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64), device_type="cpu"),
 
