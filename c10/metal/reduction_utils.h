@@ -159,6 +159,42 @@ inline ::metal::enable_if_t<::metal::is_same_v<T, long>, T> simd_min(T val) {
   return simd_broadcast(val, 0);
 }
 
+// NaN-propagating strict "should-replace" predicates for arg-reductions:
+// returns true iff `cand` strictly beats `cur` under the op's ordering.
+template <
+    typename T,
+    ::metal::enable_if_t<::metal::is_floating_point_v<T>, bool> = true>
+inline bool argmax_replace(T cand, T cur) {
+  if (::metal::isnan(cur)) {
+    return false;
+  }
+  return ::metal::isnan(cand) || cand > cur;
+}
+
+template <
+    typename T,
+    ::metal::enable_if_t<!::metal::is_floating_point_v<T>, bool> = true>
+inline bool argmax_replace(T cand, T cur) {
+  return cand > cur;
+}
+
+template <
+    typename T,
+    ::metal::enable_if_t<::metal::is_floating_point_v<T>, bool> = true>
+inline bool argmin_replace(T cand, T cur) {
+  if (::metal::isnan(cur)) {
+    return false;
+  }
+  return ::metal::isnan(cand) || cand < cur;
+}
+
+template <
+    typename T,
+    ::metal::enable_if_t<!::metal::is_floating_point_v<T>, bool> = true>
+inline bool argmin_replace(T cand, T cur) {
+  return cand < cur;
+}
+
 // argmin/argmax helpers using simd_ballot
 template <
     typename T,
