@@ -197,6 +197,15 @@ def extract_layout_metadata(input: torch.layout) -> dict[str, Any]:
     return metadata
 
 
+def extract_int_list_metadata(input: list[int]) -> dict[str, Any]:
+    assert isinstance(input, (list, tuple)) and all(
+        isinstance(item, int) and not isinstance(item, bool) for item in input
+    )
+    metadata: dict[str, Any] = {}
+    metadata["int_list_value"] = list(input)
+    return metadata
+
+
 def aoti_compile_with_persistent_cache(
     ns: str,
     op_func_name_with_overload: str,
@@ -293,14 +302,25 @@ def aoti_compile_with_persistent_cache(
             kernel_metadata_items = []
 
             for idx, input in enumerate(flattened_inputs):
+                # Skip explicit-None args (e.g. an optional `int[1]? dim`) so the
+                # written metadata vector matches the cache reader, which also
+                # drops None entries.
+                if input is None:
+                    continue
                 if isinstance(input, torch.Tensor):
                     metadata = extract_tensor_metadata(dynamic, input)
-                elif isinstance(input, list):
-                    if not all(isinstance(item, torch.Tensor) for item in input):
-                        raise AssertionError(
-                            "expected all items in list to be torch.Tensor"
-                        )
-                    metadata = extract_tensor_list_metadata(dynamic, input)
+                elif isinstance(input, (list, tuple)) and all(
+                    isinstance(item, int) and not isinstance(item, bool)
+                    for item in input
+                ):
+                    # `int[]` / `SymInt[]` params. Checked before the Tensor-list
+                    # branch so an empty list/tuple is tagged INT_LIST, matching
+                    # the cache reader and the C++ unpack_input_parameters.
+                    metadata = extract_int_list_metadata(list(input))
+                elif isinstance(input, (list, tuple)) and all(
+                    isinstance(item, torch.Tensor) for item in input
+                ):
+                    metadata = extract_tensor_list_metadata(dynamic, list(input))
                 elif isinstance(input, supported_scalar_types()):
                     metadata = extract_scalar_metadata(device_type, input)
                 elif isinstance(input, str):
