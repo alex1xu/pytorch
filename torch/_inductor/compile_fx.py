@@ -1391,7 +1391,28 @@ class _InProcessFxCompile(FxCompile):
                 # of autograd, so there should be no more autograd-related API's in the
                 # graph.
                 with torch.no_grad():
+                    # TODO(#186860): same save/restore workaround as
+                    # graph_capture.py for shallow_copy_data_ device mutation.
+                    orig_input_devices = [
+                        inp.fake_device if hasattr(inp, "fake_device") else None
+                        for inp in example_inputs
+                    ]
+
                     fake_mode = fake_tensor_prop(gm, example_inputs)
+
+                    if any(
+                        n.target is torch.ops.aten.shallow_copy_data_.default
+                        for n in gm.graph.nodes
+                        if n.op == "call_function"
+                    ):
+                        for inp, orig_dev in zip(example_inputs, orig_input_devices):
+                            if orig_dev is not None and hasattr(inp, "fake_device"):
+                                if (
+                                    inp.fake_device != orig_dev
+                                ):  # pyrefly: ignore[missing-attribute]
+                                    inp.fake_device = (  # pyrefly: ignore[missing-attribute]
+                                        orig_dev
+                                    )
 
             _recursive_record_original_output_strides(gm)
 
